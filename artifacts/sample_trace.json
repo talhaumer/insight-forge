@@ -1,0 +1,127 @@
+{
+  "run_id": "sample_run_001",
+  "timestamp": "2025-01-27T10:00:00Z",
+  "query": "AI market growth predictions 2025",
+  "workflow_steps": [
+    {
+      "step": "researcher",
+      "start_time": "2025-01-27T10:00:00Z",
+      "end_time": "2025-01-27T10:00:15Z",
+      "duration": 15.2,
+      "status": "success",
+      "tools_used": ["tavily_search"],
+      "facts_extracted": 5,
+      "sources_found": 3,
+      "details": {
+        "search_query": "AI market growth predictions 2025 trends analysis",
+        "tavily_results": 5,
+        "groq_processing": true,
+        "deduplication_applied": true
+      }
+    },
+    {
+      "step": "analyst",
+      "start_time": "2025-01-27T10:00:15Z",
+      "end_time": "2025-01-27T10:00:25Z",
+      "duration": 10.1,
+      "status": "success",
+      "violations": 0,
+      "quality_score": 0.85,
+      "details": {
+        "facts_analyzed": 5,
+        "policy_checks_passed": true,
+        "schema_validation_passed": true,
+        "groq_analysis_used": true
+      }
+    },
+    {
+      "step": "writer",
+      "start_time": "2025-01-27T10:00:25Z",
+      "end_time": "2025-01-27T10:00:35Z",
+      "duration": 9.8,
+      "status": "success",
+      "report_generated": true,
+      "schema_valid": true,
+      "details": {
+        "groq_report_generation": true,
+        "structured_output": true,
+        "citations_included": true,
+        "timestamp_added": true
+      }
+    }
+  ],
+  "metrics": {
+    "total_execution_time": 35.1,
+    "token_usage": {
+      "total_tokens": 2847,
+      "prompt_tokens": 1923,
+      "completion_tokens": 924,
+      "groq_calls": 3
+    },
+    "tool_latency": {
+      "tavily_search": 8.5,
+      "groq_llm": 12.3,
+      "retriever": 2.1
+    },
+    "failures": {
+      "tool_errors": 0,
+      "schema_violations": 0,
+      "policy_violations": 0,
+      "fallback_usage": 0
+    },
+    "cost_estimation": {
+      "groq_tokens": 2847,
+      "estimated_cost_usd": 0.014
+    }
+  },
+  "output": {
+    "topic": "AI market growth predictions 2025",
+    "summary": "The AI market is projected to experience significant growth in 2025, with industry analysts predicting a compound annual growth rate of 25-30%. Key drivers include increased enterprise adoption, advances in generative AI, and expanding applications across healthcare, finance, and manufacturing sectors. Market size is expected to reach approximately $500 billion by year-end, representing a substantial increase from 2024 levels.",
+    "references": [
+      "https://example.com/ai-market-report-2025",
+      "https://example.com/tech-trends-2025",
+      "https://example.com/enterprise-ai-adoption"
+    ],
+    "timestamp": "2025-01-27T10:00:35Z",
+    "facts": [
+      {
+        "fact": "AI market expected to reach $500B by 2025",
+        "source": "https://example.com/ai-market-report-2025",
+        "confidence": 0.9
+      },
+      {
+        "fact": "Enterprise AI adoption growing at 25-30% CAGR",
+        "source": "https://example.com/enterprise-ai-adoption",
+        "confidence": 0.85
+      },
+      {
+        "fact": "Generative AI driving 40% of new AI investments",
+        "source": "https://example.com/tech-trends-2025",
+        "confidence": 0.88
+      }
+    ],
+    "key_insights": [
+      "Healthcare and finance sectors leading AI adoption",
+      "Generative AI tools becoming mainstream in enterprises",
+      "Regulatory frameworks evolving to support AI deployment"
+    ],
+    "recommendations": [
+      "Monitor regulatory changes in target markets",
+      "Focus on industry-specific AI solutions",
+      "Invest in AI talent and infrastructure"
+    ]
+  },
+  "guardrails": {
+    "prompt_hardening_applied": true,
+    "schema_validation_passed": true,
+    "content_moderation_passed": true,
+    "input_sanitization_applied": true,
+    "output_validation_passed": true
+  },
+  "fallbacks": {
+    "tavily_fallback_used": false,
+    "groq_fallback_used": false,
+    "basic_mock_used": false,
+    "circuit_breaker_triggered": false
+  }
+}

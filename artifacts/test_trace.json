@@ -1,0 +1,36 @@
+{
+  "run_id": "test_run_001",
+  "timestamp": "2025-09-26T16:13:37.704832",
+  "query": "Test query",
+  "metrics": {
+    "token_usage": {
+      "total_tokens": 150,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "groq_calls": 1
+    },
+    "tool_latency": {
+      "tavily_search": [
+        2.5
+      ],
+      "groq_llm": [
+        1.8
+      ],
+      "retriever": [],
+      "total_time": 4.0531158447265625e-06
+    },
+    "failures": {
+      "tool_errors": 0,
+      "schema_violations": 1,
+      "policy_violations": 0,
+      "fallback_usage": 1
+    },
+    "workflow_stats": {
+      "total_runs": 1,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "avg_execution_time": 4.0531158447265625e-06
+    }
+  },
+  "test": true
+}

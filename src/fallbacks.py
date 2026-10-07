@@ -22,9 +22,11 @@ def circuit_breaker(failures: int, threshold: int = 3) -> bool:
     return failures >= threshold
 
 
-def create_fallback_response(query: str, error: str) -> Dict[str, Any]:
+def create_fallback_response(query: str, error: str, status: str = "unavailable") -> Dict[str, Any]:
     """Create fallback response when all else fails"""
     return {
+        "success": False,
+        "status": status,
         "topic": query,
         "summary": f"Unable to complete research for '{query}'. Error: {error}",
         "references": [],

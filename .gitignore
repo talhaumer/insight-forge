@@ -162,3 +162,6 @@ logs/
 # Temporary files
 tmp/
 temp/
+# Local catalog and exports
+/data/
+/catalog-exports/

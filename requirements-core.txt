@@ -1,0 +1,9 @@
+langgraph==0.6.7
+langchain-core==0.3.76
+langchain-groq==0.3.8
+langsmith==0.4.31
+groq==0.31.1
+pydantic==2.11.9
+tavily-python==0.7.12
+python-dotenv==1.1.1
+gradio==5.47.1

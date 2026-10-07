@@ -1,121 +1,196 @@
-#!/usr/bin/env python3
-"""
-Test script for Tavily MCP integration
-"""
+"""Offline regression tests; provider boundaries are mocked, workflow is real."""
 
-import os
-import sys
-from pathlib import Path
+import json
+import pytest
+from src import agents, graph
+from src.tools import retriever, tavily_unified_client
+from src.guardrails.schemas import validate_report
 
-# Add src to path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-
-from src.tools.tavily_unified_client import tavily_search_mcp, tavily_extract_mcp
-from src.tools.retriever import retrieve_market_data_mcp
-
-
-def test_mcp_search():
-    """Test MCP search functionality"""
-    print("🔍 Testing Tavily MCP Search...")
-    
-    # Test basic search
-    query = "AI market trends 2025"
-    print(f"Query: {query}")
-    
-    try:
-        result = tavily_search_mcp(query, max_results=3)
-        print(f"✅ MCP Search Result: {result.get('success', False)}")
-        
-        if result.get('success'):
-            search_results = result.get('search_results', [])
-            facts = result.get('facts', [])
-            sources = result.get('sources', [])
-            print(f"📊 Found {len(search_results) if search_results else 0} results")
-            print(f"📝 Facts: {len(facts) if facts else 0}")
-            print(f"🔗 Sources: {len(sources) if sources else 0}")
-        else:
-            print(f"❌ Error: {result.get('error', 'Unknown error')}")
-            
-    except Exception as e:
-        print(f"❌ Exception: {e}")
+URL = "https://example.org/report"
+FACT = {
+    "fact": "The survey included 100 respondents.",
+    "source": URL,
+    "confidence": 0.8,
+}
 
 
-def test_mcp_retriever():
-    """Test MCP retriever integration"""
-    print("\n🔍 Testing MCP Retriever Integration...")
-    
-    query = "Electric vehicle adoption rates"
-    print(f"Query: {query}")
-    
-    try:
-        result = retrieve_market_data_mcp(query)
-        print(f"✅ MCP Retriever Result: {result.get('success', False)}")
-        print(f"🔧 Method: {result.get('method', 'unknown')}")
-        
-        if result.get('success'):
-            search_results = result.get('search_results', [])
-            facts = result.get('facts', [])
-            sources = result.get('sources', [])
-            print(f"📊 Search Results: {len(search_results) if search_results else 0}")
-            print(f"📝 Facts: {len(facts) if facts else 0}")
-            print(f"🔗 Sources: {len(sources) if sources else 0}")
-        else:
-            print(f"❌ Error: {result.get('error', 'Unknown error')}")
-            
-    except Exception as e:
-        print(f"❌ Exception: {e}")
+@pytest.fixture(autouse=True)
+def providers(monkeypatch):
+    monkeypatch.setattr(graph, "setup_langsmith", lambda: None)
+    monkeypatch.setattr(graph, "create_tracer", lambda: None)
+    monkeypatch.setattr(
+        retriever,
+        "tavily_search",
+        lambda *a, **k: {
+            "success": True,
+            "search_results": [
+                {"url": URL, "content": FACT["fact"], "title": "Survey"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        agents,
+        "extract_facts_with_groq",
+        lambda *a: {
+            "success": True,
+            "content": json.dumps({"facts": [FACT], "needs_more_context": False}),
+        },
+    )
+    monkeypatch.setattr(
+        agents,
+        "analyze_facts_with_groq",
+        lambda *a: {
+            "success": True,
+            "content": json.dumps({"violations": [], "needs_more_context": False}),
+        },
+    )
+    monkeypatch.setattr(
+        agents,
+        "generate_report_with_groq",
+        lambda *a: {
+            "success": True,
+            "content": json.dumps({"summary": FACT["fact"], "references": [URL]}),
+        },
+    )
 
 
-def test_content_extraction():
-    """Test content extraction functionality"""
-    print("\n🔍 Testing Content Extraction...")
-    
-    # Test with a simple URL first
-    url = "https://example.com"
-    print(f"URL: {url}")
-    
-    try:
-        result = tavily_extract_mcp(url)
-        print(f"✅ Content Extraction: {result.get('success', False)}")
-        
-        if result.get('success'):
-            content = result.get('content', '')
-            title = result.get('title', '')
-            print(f"📄 Title: {title}")
-            print(f"📄 Content length: {len(content)} characters")
-            if content:
-                print(f"📄 Content preview: {content[:200]}...")
-            else:
-                print("📄 No content extracted")
-        else:
-            print(f"❌ Error: {result.get('error', 'Unknown error')}")
-            
-    except Exception as e:
-        print(f"❌ Exception: {e}")
+def test_success_preserves_sources():
+    result = graph.run_market_research("Survey research")
+    assert result["success"] is True
+    assert result["status"] == "completed"
+    assert result["facts"] == [FACT]
+    assert result["references"] == [URL]
+    assert validate_report(result, [URL])
 
 
-def main():
-    """Run all MCP tests"""
-    print("🚀 Starting Tavily MCP Integration Tests")
-    print("=" * 50)
-    
-    # Check if API key is set
-    if not os.getenv("TAVILY_API_KEY"):
-        print("❌ TAVILY_API_KEY environment variable not set")
-        print("Please set it with: export TAVILY_API_KEY=your_api_key_here")
-        return
-    
-    print(f"✅ TAVILY_API_KEY is set")
-    
-    # Run tests
-    test_mcp_search()
-    test_mcp_retriever()
-    test_content_extraction()
-    
-    print("\n" + "=" * 50)
-    print("🏁 MCP Integration Tests Complete")
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"success": False, "error": "rate limited"},
+        {"success": True, "search_results": []},
+        {"success": True, "search_results": [{"url": "invalid", "content": "text"}]},
+        {"success": True, "search_results": [{"url": URL, "content": ""}]},
+    ],
+)
+def test_search_failure_never_becomes_research(monkeypatch, response):
+    monkeypatch.setattr(retriever, "tavily_search", lambda *a, **k: response)
+    monkeypatch.setattr(
+        agents,
+        "extract_facts_with_groq",
+        lambda *a: pytest.fail("Must not call LLM without evidence"),
+    )
+    result = graph.run_market_research("Survey")
+    assert result["success"] is False
+    assert result["status"] == "unavailable"
+    assert result["facts"] == result["references"] == []
 
 
-if __name__ == "__main__":
-    main()
+def test_provider_exception(monkeypatch):
+    def fail(*a, **k):
+        raise RuntimeError("provider error")
+
+    monkeypatch.setattr(retriever, "tavily_search", fail)
+    assert graph.run_market_research("Survey")["status"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        [],
+        [{"fact": "claim", "source": "https://invented.org", "confidence": 0.9}],
+        [{"fact": "claim", "source": URL, "confidence": 3}],
+        [None],
+    ],
+)
+def test_extraction_rejects_invalid_evidence(monkeypatch, facts):
+    monkeypatch.setattr(
+        agents,
+        "extract_facts_with_groq",
+        lambda *a: {"success": True, "content": json.dumps({"facts": facts})},
+    )
+    assert graph.run_market_research("Survey")["status"] == "needs_review"
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["extract_facts_with_groq", "analyze_facts_with_groq", "generate_report_with_groq"],
+)
+def test_malformed_llm_json_cannot_succeed(monkeypatch, stage):
+    monkeypatch.setattr(
+        agents, stage, lambda *a: {"success": True, "content": "not JSON"}
+    )
+    assert graph.run_market_research("Survey")["success"] is False
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"summary": "", "references": [URL]},
+        {"summary": "Claim", "references": ["https://invented.org"]},
+        {"summary": "Claim", "references": []},
+        {
+            "summary": "Claim",
+            "references": [URL],
+            "facts": [{**FACT, "fact": "Changed claim"}],
+        },
+    ],
+)
+def test_writer_validation_blocks_completion(monkeypatch, report):
+    monkeypatch.setattr(
+        agents,
+        "generate_report_with_groq",
+        lambda *a: {"success": True, "content": json.dumps(report)},
+    )
+    result = graph.run_market_research("Survey")
+    assert result["success"] is False
+    assert result["status"] == "needs_review"
+    assert result["facts"] == []
+
+
+def test_insufficient_context_blocks_writer(monkeypatch):
+    monkeypatch.setattr(
+        agents,
+        "analyze_facts_with_groq",
+        lambda *a: {
+            "success": True,
+            "content": json.dumps({"violations": [], "needs_more_context": True}),
+        },
+    )
+    monkeypatch.setattr(
+        agents, "generate_report_with_groq", lambda *a: pytest.fail("Must not write")
+    )
+    assert graph.run_market_research("Survey")["status"] == "needs_review"
+
+
+def test_missing_key_is_runtime_failure(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setattr(tavily_unified_client, "tavily_client", None)
+    monkeypatch.setattr(retriever, "tavily_search", tavily_unified_client.tavily_search)
+    assert graph.run_market_research("Survey")["status"] == "unavailable"
+
+
+def test_failure_metrics(monkeypatch):
+    before = graph.metrics_collector.get_metrics()["workflow_stats"]["failed_runs"]
+    monkeypatch.setattr(retriever, "tavily_search", lambda *a, **k: {"success": False})
+    graph.run_market_research("Survey")
+    assert (
+        graph.metrics_collector.get_metrics()["workflow_stats"]["failed_runs"]
+        == before + 1
+    )
+
+
+def test_empty_query():
+    assert graph.run_market_research("  ")["success"] is False
+
+
+def test_final_reviewer_rejects_invalid_report():
+    state = {
+        "query": "Survey",
+        "context": "",
+        "tool_error": False,
+        "policy_violation": False,
+        "schema_ok": True,
+        "needs_more_context": False,
+        "outputs": {"sources": [URL], "report": {"summary": "invalid"}},
+    }
+    assert agents.reviewer(state)["outputs"]["report"]["success"] is False

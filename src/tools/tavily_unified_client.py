@@ -223,7 +223,14 @@ class TavilyUnifiedClient:
 
 
 # Global instance for easy access
-tavily_client = TavilyUnifiedClient()
+tavily_client = None
+
+def get_tavily_client():
+    """Resolve credentials at call time so imports work without API keys."""
+    global tavily_client
+    if tavily_client is None:
+        tavily_client = TavilyUnifiedClient()
+    return tavily_client
 
 
 # Convenience functions for backward compatibility
@@ -239,7 +246,7 @@ def tavily_search(query: str, max_results: int = 5, search_depth: str = "basic")
     Returns:
         Dictionary containing search results
     """
-    return tavily_client.search(query, max_results, search_depth)
+    return get_tavily_client().search(query, max_results, search_depth)
 
 
 def tavily_search_mcp(query: str, max_results: int = 5, search_depth: str = "basic") -> Dict[str, Any]:
@@ -254,7 +261,7 @@ def tavily_search_mcp(query: str, max_results: int = 5, search_depth: str = "bas
     Returns:
         Dictionary containing search results
     """
-    return tavily_client.search(query, max_results, search_depth)
+    return get_tavily_client().search(query, max_results, search_depth)
 
 
 def tavily_extract_mcp(url: str) -> Dict[str, Any]:
@@ -267,7 +274,7 @@ def tavily_extract_mcp(url: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing extracted content
     """
-    return tavily_client.extract_content(url)
+    return get_tavily_client().extract_content(url)
 
 
 def tavily_map_mcp(url: str) -> Dict[str, Any]:
@@ -280,7 +287,7 @@ def tavily_map_mcp(url: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing website structure
     """
-    return tavily_client.map_website(url)
+    return get_tavily_client().map_website(url)
 
 
 def tavily_crawl_mcp(url: str, max_pages: int = 10) -> Dict[str, Any]:
@@ -294,4 +301,4 @@ def tavily_crawl_mcp(url: str, max_pages: int = 10) -> Dict[str, Any]:
     Returns:
         Dictionary containing crawled content
     """
-    return tavily_client.crawl_website(url, max_pages)
+    return get_tavily_client().crawl_website(url, max_pages)

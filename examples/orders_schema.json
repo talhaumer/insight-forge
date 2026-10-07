@@ -1,0 +1,8 @@
+[
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"order_id","data_type":"bigint","nullable":false,"description":"Unique identifier assigned to an order by the commerce service.","source_table":"commerce.orders","source_column":"id","transformation":"Direct mapping; no transformation.","owner":"Commerce analytics"},
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"customer_id","data_type":"bigint","nullable":false,"source_table":"commerce.orders","source_column":"customer_id","owner":"Commerce analytics"},
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"net_amount","data_type":"decimal(18,2)","nullable":false,"description":"Order gross amount less discounts, in the currency_code currency; excludes tax and shipping.","source_table":"commerce.orders","source_column":"gross_amount, discount_amount","transformation":"gross_amount - discount_amount","owner":"Finance analytics"},
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"currency_code","data_type":"varchar(3)","nullable":false,"description":"Currency used for the monetary amounts on this order.","source_table":"commerce.orders","source_column":"currency","owner":"Finance analytics"},
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"order_status","data_type":"varchar(30)","nullable":false,"source_table":"commerce.orders","source_column":"status","owner":"Commerce analytics"},
+  {"source_system":"commerce_warehouse","table_name":"analytics.orders","column_name":"created_at","data_type":"timestamp","nullable":false,"source_table":"commerce.orders","source_column":"created_at","owner":"Commerce analytics"}
+]

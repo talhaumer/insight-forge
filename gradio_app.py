@@ -1,253 +1,352 @@
-#!/usr/bin/env python3
-"""
-Gradio Web Interface for Market Research Workflow
-Simple web app for users to input queries and get research reports
-"""
+"""Local-first catalog UI. Run with python gradio_app.py."""
 
-import gradio as gr
-import sys
-import os
 import json
+import tempfile
 from pathlib import Path
+import gradio as gr
+from dotenv import load_dotenv
+from src import catalog
+from src.connectors import normalize
+from src.catalog_ai import generate_suggestion
 
-# Add src to path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+load_dotenv()
+DEMO = Path(__file__).parent / "examples" / "orders_schema.json"
+HEADERS = ["ID", "System", "Table", "Column", "Type", "Definition status", "Definition"]
 
-# Import our workflow components
-from src.graph import run_market_research
-from src.observability import metrics_collector, generate_metrics_summary
 
-def generate_research_report(query):
-    """Generate a research report for the given query"""
-    if not query or not query.strip():
-        return "Please enter a valid research query.", None, None
-    
+def refresh(search=""):
+    columns = catalog.list_columns(search or "")
+    rows = [
+        [
+            c["id"],
+            c["source_system"],
+            c["table_name"],
+            c["column_name"],
+            c["metadata"]["data_type"],
+            c["definition_status"],
+            c["definition"],
+        ]
+        for c in columns
+    ]
+    choices = [
+        (f"{c['source_system']} / {c['table_name']}.{c['column_name']}", str(c["id"]))
+        for c in columns
+    ]
+    return rows, gr.update(choices=choices, value=None)
+
+
+def import_file(path, connector="schema_csv_json"):
+    if not path:
+        raise gr.Error("Choose a schema CSV or JSON file first.")
+    file = Path(path)
+    if file.stat().st_size > catalog.MAX_UPLOAD_BYTES:
+        raise gr.Error("Schema file exceeds the 2 MB limit.")
     try:
-        # Run the market research workflow
-        result = run_market_research(query.strip())
-        
-        # Format the report for display
-        if 'topic' in result and 'summary' in result:
-            # Format the main report
-            report_text = f"""
-# {result.get('topic', 'Research Report')}
+        records = normalize(connector, file.read_bytes(), file.suffix)
+        result = catalog.import_schema(json.dumps(records).encode(), ".json")
+    except (ValueError, UnicodeError) as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        f"Imported: {result['added']} new, {result['updated']} changed, {result['unchanged']} unchanged. Missing columns are retained.",
+        *refresh(),
+    )
 
-## Summary
-{result.get('summary', 'No summary available')}
 
-## Key Facts
-"""
-            
-            # Add facts
-            if 'facts' in result and result['facts']:
-                for i, fact in enumerate(result['facts'], 1):
-                    report_text += f"\n{i}. **{fact.get('fact', 'N/A')}**\n"
-                    report_text += f"   - Source: {fact.get('source', 'N/A')}\n"
-                    report_text += f"   - Confidence: {fact.get('confidence', 'N/A')}\n"
-            
-            # Add references
-            if 'references' in result and result['references']:
-                report_text += f"\n## References\n"
-                for i, ref in enumerate(result['references'], 1):
-                    report_text += f"{i}. {ref}\n"
-            
-            report_text += f"\n---\n*Generated: {result.get('timestamp', 'N/A')}*"
-            
-            # Get metrics for the sidebar
-            metrics = metrics_collector.get_metrics()
-            metrics_text = generate_metrics_summary(metrics)
-            
-            # Create a simple JSON summary for download - save to file
-            json_summary = {
-                "query": query,
-                "topic": result.get('topic', ''),
-                "summary": result.get('summary', ''),
-                "facts_count": len(result.get('facts', [])),
-                "references_count": len(result.get('references', [])),
-                "timestamp": result.get('timestamp', ''),
-                "facts": result.get('facts', []),
-                "references": result.get('references', [])
-            }
-            
-            # Save JSON to a temporary file
-            import tempfile
-            import os
-            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-            json.dump(json_summary, temp_file, indent=2)
-            temp_file.close()
-            
-            return report_text, metrics_text, temp_file.name
-        else:
-            return "Error: Could not generate report. Please try again.", None, None
-            
-    except Exception as e:
-        error_msg = f"Error generating report: {str(e)}"
-        return error_msg, None, None
+def select_column(column_id):
+    if not column_id:
+        return (
+            {},
+            "",
+            False,
+            None,
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+        )
+    c = catalog.get_column(column_id)
+    suggestions = [
+        (f"#{s['id']} · {s['definition'][:70]}", str(s["id"]))
+        for s in c["suggestions"]
+        if s["status"] == "proposed"
+    ]
+    rules = [
+        (f"#{r['id']} · {r['name']} ({r['status']})", str(r["id"])) for r in c["rules"]
+    ]
+    return (
+        c,
+        c["definition"],
+        c["definition_status"] == "approved",
+        c["revision"],
+        gr.update(choices=suggestions, value=None),
+        gr.update(choices=rules, value=None),
+    )
+
+
+def save(column_id, definition, approved, revision):
+    if not column_id:
+        raise gr.Error("Select a column first.")
+    try:
+        catalog.save_definition(column_id, definition, approved, revision)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        "Definition saved. Refresh the catalog table to see its new status.",
+        *select_column(column_id),
+    )
+
+
+def suggest(column_id):
+    if not column_id:
+        raise gr.Error("Select a column first.")
+    try:
+        generate_suggestion(column_id)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    except Exception as exc:
+        raise gr.Error(
+            "AI provider unavailable or returned invalid output. No definition was approved."
+        ) from exc
+    return (
+        "Proposal stored for review. Review its rationale and each rule in the details panel.",
+        *select_column(column_id),
+    )
+
+
+def accept(column_id, suggestion_id, revision):
+    if not column_id or not suggestion_id:
+        raise gr.Error("Select a column and a suggestion first.")
+    c = catalog.get_column(column_id)
+    if int(suggestion_id) not in {s["id"] for s in c["suggestions"]}:
+        raise gr.Error("Suggestion does not belong to the selected column.")
+    try:
+        catalog.accept_suggestion(suggestion_id, revision)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return "Definition approved. Rules require a separate review.", *select_column(
+        column_id
+    )
+
+
+def add_rule(column_id, name, kind, specification):
+    if not column_id:
+        raise gr.Error("Select a column first.")
+    try:
+        catalog.add_rule(column_id, name, kind, specification)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        "Rule proposal saved. Rules are documented, not executed against data.",
+        *select_column(column_id),
+    )
+
+
+def review_rule(column_id, rule_id, decision):
+    if not column_id or not rule_id:
+        raise gr.Error("Select a column and rule first.")
+    c = catalog.get_column(column_id)
+    if int(rule_id) not in {r["id"] for r in c["rules"]}:
+        raise gr.Error("Rule does not belong to this column.")
+    catalog.review_rule(rule_id, decision)
+    return f"Rule {decision}.", *select_column(column_id)
+
+
+def attach(column_id, path, source_name, start, end):
+    if not column_id or not path:
+        raise gr.Error("Select a column and an evidence file first.")
+    file = Path(path)
+    kind = {".sql": "sql", ".py": "python", ".txt": "text"}.get(file.suffix.lower())
+    if kind is None or file.stat().st_size > catalog.MAX_UPLOAD_BYTES:
+        raise gr.Error("Choose SQL, Python or text evidence up to 2 MB.")
+    try:
+        catalog.attach_evidence(
+            column_id,
+            source_name or file.name,
+            file.read_text(),
+            kind,
+            start_line=int(start),
+            end_line=int(end) or None,
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        "Evidence attached. Reloaded definition requires review when its context changes.",
+        *select_column(column_id),
+    )
+
+
+def export():
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="insight-catalog-", delete=False
+    ) as file:
+        json.dump(catalog.export_catalog(), file, indent=2)
+        return file.name
+
 
 def create_gradio_interface():
-    """Create the Gradio interface"""
-    
-    with gr.Blocks(
-        title="Market Research Workflow",
-        theme=gr.themes.Soft(),
-        css="""
-        .gradio-container {
-            max-width: 1200px !important;
-        }
-        .report-box {
-            background-color: #f8f9fa !important;
-            border: 1px solid #dee2e6 !important;
-            border-radius: 8px !important;
-            padding: 20px !important;
-            margin: 10px 0 !important;
-            color: #212529 !important;
-        }
-        .report-box h1, .report-box h2, .report-box h3 {
-            color: #212529 !important;
-        }
-        .report-box p, .report-box li {
-            color: #212529 !important;
-        }
-        .report-box strong {
-            color: #0d6efd !important;
-        }
-        .metrics-box {
-            background-color: #e7f3ff !important;
-            border: 1px solid #b3d9ff !important;
-            border-radius: 8px !important;
-            padding: 15px !important;
-            margin: 10px 0 !important;
-            color: #212529 !important;
-        }
-        .metrics-box h1, .metrics-box h2, .metrics-box h3 {
-            color: #212529 !important;
-        }
-        .metrics-box p, .metrics-box li {
-            color: #212529 !important;
-        }
-        .gradio-markdown {
-            color: #212529 !important;
-        }
-        .gradio-markdown h1, .gradio-markdown h2, .gradio-markdown h3 {
-            color: #212529 !important;
-        }
-        .gradio-markdown p, .gradio-markdown li {
-            color: #212529 !important;
-        }
-        .gradio-markdown strong {
-            color: #0d6efd !important;
-        }
-        """
-    ) as demo:
-        
-        gr.Markdown("""
-        # 🔍 Market Research Workflow
-        
-        Enter a research query below to generate a comprehensive market research report using our multi-agent AI system.
-        
-        **Features:**
-        - Real-time web search with Tavily
-        - AI-powered analysis with Groq LLM
-        - Multi-agent workflow (Researcher, Analyst, Writer, Reviewer)
-        - Security guardrails and content validation
-        - Comprehensive metrics and tracing
-        """)
-        
-        with gr.Row():
-            with gr.Column(scale=3):
-                # Input section
-                query_input = gr.Textbox(
-                    label="Research Query",
-                    placeholder="Enter your market research question (e.g., 'AI market trends 2025', 'Electric vehicle adoption rates')",
-                    lines=2,
-                    max_lines=4
-                )
-                
-                submit_btn = gr.Button("🔍 Generate Report", variant="primary", size="lg")
-                
-                # Output section
-                report_output = gr.Markdown(
-                    label="Research Report",
-                    value="Enter a query above to generate a research report...",
-                    elem_classes=["report-box"]
-                )
-                
-                # Download button
-                download_btn = gr.DownloadButton(
-                    label="📥 Download Report (JSON)",
-                    visible=False
-                )
-                
-            with gr.Column(scale=1):
-                # Metrics sidebar
-                metrics_output = gr.Markdown(
-                    label="System Metrics",
-                    value="Metrics will appear here after generating a report...",
-                    elem_classes=["metrics-box"]
-                )
-        
-        # Examples section
-        gr.Markdown("### 💡 Example Queries")
-        examples = gr.Examples(
-            examples=[
-                "Electric vehicle market trends 2025",
-                "AI market growth predictions",
-                "Sustainable energy investments",
-                "Remote work technology trends",
-                "Cybersecurity market analysis",
-                "Healthcare AI adoption rates"
-            ],
-            inputs=query_input,
-            label="Click on an example to try it"
+    with gr.Blocks(title="Insight Forge · Data Catalog", theme=gr.themes.Soft()) as app:
+        gr.Markdown(
+            "# Insight Forge\n### Understand your columns. Keep the business meaning with the schema.\nImport schema metadata, document definitions and review quality rules. Everything is stored locally in SQLite. No database credentials are required."
         )
-        
-        # Event handlers
-        def handle_submit(query):
-            report, metrics, json_file_path = generate_research_report(query)
-            return (
-                report,
-                metrics,
-                gr.update(visible=True, value=json_file_path),
-                gr.update(value=json_file_path)
+        with gr.Tab("1 · Import & discover"):
+            gr.Markdown(
+                "Start with the synthetic orders schema, or upload your own CSV/JSON metadata. This upload accepts schema records, not raw customer data."
             )
-        
-        submit_btn.click(
-            fn=handle_submit,
-            inputs=query_input,
-            outputs=[report_output, metrics_output, download_btn, download_btn]
+            with gr.Row():
+                upload = gr.File(
+                    label="Schema file · CSV or JSON · up to 2 MB",
+                    file_types=[".csv", ".json"],
+                    type="filepath",
+                )
+                with gr.Column():
+                    demo_button = gr.Button(
+                        "Load sample orders schema", variant="primary"
+                    )
+                    upload_button = gr.Button("Import schema")
+            connector = gr.Dropdown(
+                ["schema_csv_json", "dbt_manifest"],
+                value="schema_csv_json",
+                label="Connector",
+            )
+            status = gr.Textbox(label="Import result", interactive=False)
+            search = gr.Textbox(
+                label="Search columns, definitions, owners or source mappings",
+                placeholder="Try net_amount or Finance",
+            )
+            refresh_button = gr.Button("Search / refresh")
+            table = gr.Dataframe(
+                headers=HEADERS,
+                datatype=["number"] + ["str"] * 6,
+                interactive=False,
+                label="Data dictionary",
+                wrap=True,
+            )
+            gr.Markdown(
+                "Imported descriptions start as **proposed**. Schema changes preserve existing definitions and mark them for review. Re-imports are additive: absent columns are not deleted."
+            )
+        with gr.Tab("2 · Define & review"):
+            selected = gr.Dropdown(label="Column", choices=[])
+            reload_button = gr.Button("Reload selected column")
+            details = gr.JSON(
+                label="Metadata · declared source mapping · proposals · rules · history"
+            )
+            revision = gr.State(None)
+            definition = gr.Textbox(
+                label="Business definition",
+                lines=3,
+                placeholder="Explain meaning, units, exclusions and relevant business context.",
+            )
+            approved = gr.Checkbox(
+                label="I reviewed this definition and approve it", value=False
+            )
+            save_button = gr.Button("Save definition", variant="primary")
+            with gr.Accordion("Attach SQL or Python evidence", open=False):
+                gr.Markdown(
+                    "Attach the file and line range that supports this field. Files are stored as text and never executed. Declared mappings are not automatically verified. A changed attachment marks the definition and approved rules for review."
+                )
+                source_file = gr.File(
+                    label="Evidence file",
+                    file_types=[".sql", ".py", ".txt"],
+                    type="filepath",
+                )
+                source_name = gr.Textbox(
+                    label="Stable source path or label", placeholder="models/orders.sql"
+                )
+                start_line = gr.Number(label="First line", value=1, precision=0)
+                end_line = gr.Number(
+                    label="Last line (0 = end of file)", value=0, precision=0
+                )
+                attach_button = gr.Button("Attach evidence snapshot")
+            with gr.Accordion("Optional AI assistance", open=False):
+                gr.Markdown(
+                    "**Generate** sends this column’s metadata, current definition and selected code excerpts to Groq. Review attached code before using AI; source files may contain sensitive text. AI proposals can be wrong; inspect the definition, rationale and rules in the details panel before accepting."
+                )
+                ai_button = gr.Button("Generate AI proposal")
+                suggestion = gr.Dropdown(
+                    label="Definition proposal to approve", choices=[]
+                )
+                accept_button = gr.Button("Approve selected AI definition")
+            with gr.Accordion("Quality rule register", open=False):
+                gr.Markdown(
+                    "Store business expectations for later implementation. This prototype does not run the rules against data."
+                )
+                rule_name = gr.Textbox(
+                    label="Rule name", placeholder="Order identifier is required"
+                )
+                rule_type = gr.Dropdown(
+                    ["not_null", "unique", "range", "accepted_values", "custom"],
+                    value="not_null",
+                    label="Rule type",
+                )
+                rule_spec = gr.Textbox(label="Rule specification", lines=2)
+                rule_add = gr.Button("Add rule proposal")
+                rule_selected = gr.Dropdown(label="Rule to review", choices=[])
+                rule_decision = gr.Radio(
+                    ["approved", "rejected"], value="approved", label="Review decision"
+                )
+                rule_review = gr.Button("Save rule decision")
+            edit_status = gr.Textbox(label="Review result", interactive=False)
+        with gr.Tab("3 · Export"):
+            gr.Markdown(
+                "Export definitions, metadata, rules, AI proposals and review history as JSON. Lineage fields are declarations supplied in the schema file—not relationships discovered or verified from source code."
+            )
+            export_button = gr.Button("Export catalog", variant="primary")
+            download = gr.File(label="Catalog JSON", interactive=False)
+        edit_outputs = [
+            edit_status,
+            details,
+            definition,
+            approved,
+            revision,
+            suggestion,
+            rule_selected,
+        ]
+        detail_outputs = [
+            details,
+            definition,
+            approved,
+            revision,
+            suggestion,
+            rule_selected,
+        ]
+        demo_button.click(
+            lambda: import_file(str(DEMO)), outputs=[status, table, selected]
         )
-        
-        # Also trigger on Enter key
-        query_input.submit(
-            fn=handle_submit,
-            inputs=query_input,
-            outputs=[report_output, metrics_output, download_btn, download_btn]
+        upload_button.click(
+            import_file, inputs=[upload, connector], outputs=[status, table, selected]
         )
-        
-        # Footer
-        gr.Markdown("""
-        ---
-        **Powered by:** LangGraph + Groq LLM + Tavily Search + LangSmith Tracing
-        
-        This system uses a multi-agent architecture with comprehensive security guardrails, 
-        real-time web search, and AI-powered analysis to generate market research reports.
-        """)
-    
-    return demo
+        refresh_button.click(refresh, inputs=search, outputs=[table, selected])
+        search.submit(refresh, inputs=search, outputs=[table, selected])
+        selected.change(select_column, inputs=selected, outputs=detail_outputs)
+        reload_button.click(select_column, inputs=selected, outputs=detail_outputs)
+        save_button.click(
+            save,
+            inputs=[selected, definition, approved, revision],
+            outputs=edit_outputs,
+        )
+        attach_button.click(
+            attach,
+            inputs=[selected, source_file, source_name, start_line, end_line],
+            outputs=edit_outputs,
+        )
+        ai_button.click(suggest, inputs=selected, outputs=edit_outputs)
+        accept_button.click(
+            accept, inputs=[selected, suggestion, revision], outputs=edit_outputs
+        )
+        rule_add.click(
+            add_rule,
+            inputs=[selected, rule_name, rule_type, rule_spec],
+            outputs=edit_outputs,
+        )
+        rule_review.click(
+            review_rule,
+            inputs=[selected, rule_selected, rule_decision],
+            outputs=edit_outputs,
+        )
+        export_button.click(export, outputs=download)
+        app.load(refresh, outputs=[table, selected])
+    return app
+
 
 if __name__ == "__main__":
-    # Create and launch the interface
-    demo = create_gradio_interface()
-    
-    print("🚀 Starting Market Research Workflow Web Interface...")
-    print("📊 Features: Multi-agent AI, Real-time search, Security guardrails")
-    print("🌐 The interface will open in your browser")
-    
-    demo.launch(
-        server_name="0.0.0.0",  # Allow external access
-        server_port=7860,       # Default Gradio port
-        share=False,            # Set to True to create a public link
-        show_error=True,        # Show errors in the interface
-        quiet=False             # Show startup messages
+    create_gradio_interface().launch(
+        server_name="127.0.0.1", server_port=7860, share=False
     )

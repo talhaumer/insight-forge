@@ -13,14 +13,23 @@ from .observability import (
 
 def should_continue_to_analyst(state: WorkflowState) -> str:
     """Decide whether to continue to analyst or handle errors"""
-    if state.get("tool_error", False):
+    if (
+        state.get("tool_error", False)
+        or not state.get("schema_ok", True)
+        or state.get("needs_more_context", False)
+    ):
         return "reviewer"
     return "analyst"
 
 
 def should_continue_to_writer(state: WorkflowState) -> str:
     """Decide whether to continue to writer or reviewer"""
-    if state.get("policy_violation", False) or not state.get("schema_ok", True):
+    if (
+        state.get("tool_error", False)
+        or state.get("needs_more_context", False)
+        or state.get("policy_violation", False)
+        or not state.get("schema_ok", True)
+    ):
         return "reviewer"
     return "writer"
 
@@ -47,7 +56,7 @@ def create_workflow() -> StateGraph:
         should_continue_to_writer,
         {"writer": "writer", "reviewer": "reviewer"},
     )
-    workflow.add_edge("writer", END)
+    workflow.add_edge("writer", "reviewer")
     workflow.add_edge("reviewer", END)
 
     return workflow
@@ -57,6 +66,10 @@ def run_market_research(query: str) -> Dict[str, Any]:
     """Run the complete market research workflow with observability"""
     import time
     from datetime import datetime
+
+    if not isinstance(query, str) or not query.strip():
+        return create_fallback_response("", "A non-empty research query is required")
+    query = query.strip()
 
     # Setup observability
     langsmith_client = setup_langsmith()
@@ -97,7 +110,7 @@ def run_market_research(query: str) -> Dict[str, Any]:
         )
 
         # Record successful completion
-        metrics_collector.end_run(success=True)
+        metrics_collector.end_run(success=final_result.get("success") is True)
 
         # Export trace if LangSmith is available
         if langsmith_client:
@@ -130,4 +143,4 @@ def run_market_research(query: str) -> Dict[str, Any]:
             }
             export_trace_to_json(error_trace, f"error_trace_{run_id}.json")
 
-        return create_fallback_response(query, str(e))
+        return create_fallback_response(query, "Workflow execution failed")
